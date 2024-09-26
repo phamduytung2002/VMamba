@@ -15,6 +15,7 @@ import argparse
 import datetime
 import tqdm
 import numpy as np
+import wandb
 
 import torch
 import torch.backends.cudnn as cudnn
@@ -95,6 +96,8 @@ def parse_option():
     parser.add_argument('--model_ema_force_cpu', type=str2bool, default=False, help='')
 
     parser.add_argument('--memory_limit_rate', type=float, default=-1, help='limitation of gpu memory use')
+    parser.add_argument('--wandb', type=str2bool, default=True, help='Use wandb for logging')  # Add wandb argument
+
 
     args, unparsed = parser.parse_known_args()
 
@@ -108,6 +111,8 @@ def main(config, args):
 
     logger.info(f"Creating model:{config.MODEL.TYPE}/{config.MODEL.NAME}")
     model = build_model(config)
+    if args.wandb and dist.get_rank() == 0:
+        wandb.init(project="moe_vmamba", config=config, name='baseline')
 
     if dist.get_rank() == 0:
         if hasattr(model, 'flops'):
@@ -216,6 +221,10 @@ def main(config, args):
             logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1_ema:.1f}%")
             max_accuracy_ema = max(max_accuracy_ema, acc1_ema)
             logger.info(f'Max accuracy ema: {max_accuracy_ema:.2f}%')
+            
+        if args.wandb and dist.get_rank() == 0:
+            wandb.log({'Epoch': epoch, 'Accuracy 1': acc1, 'Accuracy 5': acc5, 'Val Loss': loss})
+
 
 
     total_time = time.time() - start_time
@@ -272,6 +281,13 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
         scaler_meter.update(loss_scale_value)
         batch_time.update(time.time() - end)
         end = time.time()
+        if args.wandb and dist.get_rank() == 0:
+            wandb.log({
+                'Train Loss': loss_meter.avg,
+                'Learning Rate': optimizer.param_groups[0]["lr"],
+                'Batch Time': batch_time.avg,
+                'Epoch': epoch
+            })
 
         if idx > model_time_warmup:
             model_time.update(batch_time.val - data_time.val)
